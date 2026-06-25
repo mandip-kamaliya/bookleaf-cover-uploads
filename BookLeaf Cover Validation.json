@@ -1,0 +1,426 @@
+{
+  "name": "BookLeaf Cover Validation",
+  "nodes": [
+    {
+      "parameters": {
+        "pollTimes": {
+          "item": [
+            {
+              "mode": "everyMinute"
+            }
+          ]
+        },
+        "triggerOn": "specificFolder",
+        "folderToWatch": {
+          "__rl": true,
+          "value": "https://drive.google.com/drive/folders/YOUR_GOOGLE_DRIVE_FOLDER_ID",
+          "mode": "url"
+        },
+        "event": "fileCreated",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleDriveTrigger",
+      "typeVersion": 1,
+      "position": [
+        -512,
+        -224
+      ],
+      "id": "f152f992-52c8-4cf7-84f2-6709c1f30176",
+      "name": "Watch Cover Uploads",
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "Sy7OaVhG9xYqsyLu",
+          "name": "Google Drive account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const fileName = $input.first().json.name;\nconst parts = fileName.split('_');\nconst isbn = parts[0];\nconst fileId = $input.first().json.id;\nconst fileUrl = $input.first().json.webViewLink;\nconst mimeType = $input.first().json.mimeType;\n\nif (!isbn) {\n  return [{\n    json: {\n      error: true,\n      message: `Invalid filename format: ${fileName}`,\n      fileName\n    }\n  }];\n}\n\nreturn [{\n  json: {\n    isbn,\n    fileId,\n    fileName,\n    fileUrl,\n    mimeType,\n    timestamp: new Date().toISOString()\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -304,
+        -224
+      ],
+      "id": "53c2e608-d4a9-41d4-94b5-25e715c07677",
+      "name": "Extract ISBN"
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "mode": "list",
+          "cachedResultName": "BookLeaf Cover Upload",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/YOUR_GOOGLE_SHEET_ID/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Sheet1",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/YOUR_GOOGLE_SHEET_ID/edit#gid=0"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        -96,
+        -224
+      ],
+      "id": "1331efe3-9542-4af5-9e51-154636247a03",
+      "name": "Get Author Info",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "cx4NYHnELGSFrFXJ",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const allRows = $input.all();\nconst extractData = $('Extract ISBN').first().json;\nconst isbn = extractData.isbn;\n\nconst match = allRows.find(row => \n  row.json['ISBN']?.toString() === isbn?.toString()\n);\n\nif (!match) {\n  return [{\n    json: {\n      isbn,\n      authorName: 'Unknown Author',\n      authorEmail: null,\n      fileId: extractData.fileId,\n      fileName: extractData.fileName,\n      fileUrl: extractData.fileUrl,\n      mimeType: extractData.mimeType,\n      timestamp: extractData.timestamp\n    }\n  }];\n}\n\nreturn [{\n  json: {\n    isbn,\n    authorName: match.json['Author Name'],\n    authorEmail: match.json['Author Email'],\n    fileId: extractData.fileId,\n    fileName: extractData.fileName,\n    fileUrl: extractData.fileUrl,\n    mimeType: extractData.mimeType,\n    timestamp: extractData.timestamp\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        112,
+        -224
+      ],
+      "id": "ad9b00ba-ed13-4076-ad68-ded83695e341",
+      "name": "Match Author"
+    },
+    {
+      "parameters": {
+        "operation": "download",
+        "fileId": {
+          "__rl": true,
+          "value": "={{ $json.fileId }}",
+          "mode": "id"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        320,
+        -224
+      ],
+      "id": "d2dd16f8-24e9-4279-822a-c6adaedfadfb",
+      "name": "Download Cover",
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "Sy7OaVhG9xYqsyLu",
+          "name": "Google Drive account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const binaryKey = Object.keys($input.first().binary)[0];\nconst mimeType = $input.first().binary[binaryKey].mimeType || 'image/png';\n\nconst buffer = await helpers.getBinaryDataBuffer(0, binaryKey);\nconst base64String = buffer.toString('base64');\n\nreturn [{\n  json: {\n    ...$('Match Author').first().json,\n    base64Image: base64String,\n    imageMimeType: mimeType\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        528,
+        -224
+      ],
+      "id": "4045e38c-d387-4e25-8b92-eab70dc6c9a7",
+      "name": "Prepare Image"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://openrouter.ai/api/v1/chat/completions",
+        "sendHeaders": true,
+        "specifyHeaders": "json",
+        "jsonHeaders": "{\n  \"Authorization\": \"Bearer YOUR_OPENROUTER_API_KEY\",\n  \"Content-Type\": \"application/json\"\n}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"qwen/qwen2.5-vl-72b-instruct\",\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": [\n        {\n          \"type\": \"text\",\n          \"text\": \"You are a book cover layout validator for BookLeaf Publishing.\\n\\nAnalyze this book cover image carefully and check for layout issues.\\n\\nCOVER SPECIFICATIONS:\\n- Front cover dimensions: 5x8 inches\\n- Safe area margins: 3mm on each side\\n- Bottom 9mm is reserved for the award badge.\\n- Author name must not overlap the badge area.\\n\\nReturn ONLY valid JSON.\\n\\n{\\n\\\"status\\\":\\\"PASS or REVIEW NEEDED\\\",\\n\\\"confidence_score\\\":85,\\n\\\"critical_issues\\\":[],\\n\\\"summary\\\":\\\"...\\\"\\n}\"\n        },\n        {\n          \"type\": \"image_url\",\n          \"image_url\": {\n            \"url\": \"data:{{$json.imageMimeType}};base64,{{$json.base64Image}}\"\n          }\n        }\n      ]\n    }\n  ],\n  \"temperature\": 0.1,\n  \"max_tokens\": 2000\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        -480,
+        48
+      ],
+      "id": "a9f8ba5f-bebb-41c8-a7cc-3ccf869e2334",
+      "name": "Gemini Vision Analysis"
+    },
+    {
+      "parameters": {
+        "jsCode": "const rawResponse = $input.first().json;\n\n// Handle if response is array or object\nconst geminiResponse = Array.isArray(rawResponse) ? rawResponse[0] : rawResponse;\nconst authorData = $('Match Author').first().json;\n\nconst rawText = geminiResponse.candidates?.[0]?.content?.parts?.[0]?.text || '';\nlet analysis;\ntry {\n  const cleaned = rawText.replace(/```json|```/g, '').trim();\n  analysis = JSON.parse(cleaned);\n} catch(e) {\n  analysis = {\n    status: 'REVIEW NEEDED',\n    confidence_score: 0,\n    critical_issues: [{\n      type: 'parse_error',\n      severity: 'moderate',\n      description: 'Could not analyze cover automatically',\n      correction: 'Please review manually'\n    }],\n    summary: 'Automatic analysis failed - manual review required'\n  };\n}\n\nconst issuesText = analysis.critical_issues?.length > 0\n  ? analysis.critical_issues.map(i => \n      `${i.severity === 'critical' ? '❌' : '⚠️'} ${i.description}`\n    ).join('\\n')\n  : 'No issues detected';\n\nconst corrections = analysis.critical_issues?.length > 0\n  ? analysis.critical_issues.map((i, idx) => \n      `${idx + 1}. ${i.correction}`\n    ).join('\\n')\n  : 'Your cover meets all requirements.';\n\nreturn [{\n  json: {\n    ...authorData,\n    status: analysis.status,\n    confidenceScore: analysis.confidence_score,\n    issuesFound: issuesText,\n    correctionInstructions: corrections,\n    summary: analysis.summary,\n    rawAnalysis: JSON.stringify(analysis)\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -64,
+        48
+      ],
+      "id": "e636cb40-b0a0-44b5-b995-0be9188ab7c9",
+      "name": "Parse Analysis"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.airtable.com/v0/YOUR_AIRTABLE_BASE_ID/Covers",
+        "sendHeaders": true,
+        "specifyHeaders": "json",
+        "jsonHeaders": "{\n  \"Authorization\": \"Bearer YOUR_AIRTABLE_PERSONAL_ACCESS_TOKEN\",\n  \"Content-Type\": \"application/json\"\n}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"records\": [\n    {\n      \"fields\": {\n        \"Book ID (ISBN)\": \"{{ $json.isbn }}\",\n        \"Author Name\": \"{{ $json.authorName }}\",\n        \"File Name\": \"{{ $json.fileName }}\",\n        \"Status\": \"{{ $json.status }}\",\n        \"Confidence Score\": {{ $json.confidenceScore }},\n        \"Issues Found\": \"{{ $json.issuesFound }}\",\n        \"Correction Instructions\": \"{{ $json.correctionInstructions }}\",\n        \"File URL\": \"{{ $json.fileUrl }}\",\n        \"Detection Timestamp\": \"{{ $json.timestamp }}\",\n        \"Revision Count\": 0\n      }\n    }\n  ]\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        144,
+        48
+      ],
+      "id": "53263d3f-169d-4c0e-adb6-9e16cbf86356",
+      "name": "Save to Airtable"
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $('Parse Analysis').first().json.authorEmail }}",
+        "subject": "=⚠️ Action Required: Book Cover Needs Revision — ISBN {{ $('Parse Analysis').first().json.isbn }}",
+        "message": "=<div style=\"font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;\">   <div style=\"background: #c0392b; padding: 20px; text-align: center;\">     <h1 style=\"color: white; margin: 0;\">BookLeaf Publishing</h1>   </div>      <div style=\"padding: 30px; background: #f9f9f9;\">     <h2 style=\"color: #e74c3c;\">⚠️ Cover Revision Required</h2>          <p>Dear {{ $('Parse Analysis').first().json.authorName }},</p>          <p>Thank you for submitting your book cover. After automated review, we found some issues that need to be addressed before we can proceed.</p>          <div style=\"background: #fdecea; padding: 15px; border-radius: 8px; margin: 20px 0;\">       <p><strong>ISBN:</strong> {{ $('Parse Analysis').first().json.isbn }}</p>       <p><strong>Status:</strong> ⚠️ REVIEW NEEDED</p>       <p><strong>Confidence Score:</strong> {{ $('Parse Analysis').first().json.confidenceScore }}%</p>     </div>          <h3>Issues Detected:</h3>     <div style=\"background: #fff; padding: 15px; border-left: 4px solid #e74c3c; margin: 10px 0;\">       <pre style=\"white-space: pre-wrap;\">{{ $('Parse Analysis').first().json.issuesFound }}</pre>     </div>          <h3>How to Fix:</h3>     <div style=\"background: #fff; padding: 15px; border-left: 4px solid #3498db; margin: 10px 0;\">       <pre style=\"white-space: pre-wrap;\">{{ $('Parse Analysis').first().json.correctionInstructions }}</pre>     </div>          <h3>Key Reminder:</h3>     <p>The bottom 9mm of your cover is reserved for the <strong>\"21st Century Emily Dickinson Award\"</strong> badge. Please ensure no text appears in this zone.</p>          <p><strong>Please resubmit your corrected cover within 48 hours</strong> using the same filename format to the same Google Drive folder.</p>          <p>If you need assistance, please contact us at info@bookleafpub.com</p>          <p>Warm regards,<br>     <strong>BookLeaf Publishing Team</strong><br>     info@bookleafpub.com</p>   </div> </div>",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        704,
+        160
+      ],
+      "id": "8c98d7e8-edd6-4ef1-9e45-89d178f0982c",
+      "name": "REVIEW NEEDED email",
+      "webhookId": "5febb2ef-0239-4361-82d0-98b650d24866",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "FGfoXUzOHz5UDRNl",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $('Parse Analysis').first().json.authorEmail }}",
+        "subject": "=✅ Your Book Cover Has Been Approved — ISBN {{ $('Parse Analysis').first().json.isbn }}",
+        "message": "=<div style=\"font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;\">   <div style=\"background: #c0392b; padding: 20px; text-align: center;\">     <h1 style=\"color: white; margin: 0;\">BookLeaf Publishing</h1>   </div>      <div style=\"padding: 30px; background: #f9f9f9;\">     <h2 style=\"color: #27ae60;\">✅ Cover Approved!</h2>          <p>Dear {{ $('Parse Analysis').first().json.authorName }},</p>          <p>Great news! Your book cover has been reviewed and <strong>passed all validation checks</strong>.</p>          <div style=\"background: #d5f5e3; padding: 15px; border-radius: 8px; margin: 20px 0;\">       <p><strong>ISBN:</strong> {{ $('Parse Analysis').first().json.isbn }}</p>       <p><strong>Status:</strong> ✅ PASS</p>       <p><strong>Confidence Score:</strong> {{ $('Parse Analysis').first().json.confidenceScore }}%</p>       <p><strong>Review Date:</strong> {{ $('Parse Analysis').first().json.timestamp }}</p>     </div>          <p>{{ $('Parse Analysis').first().json.summary }}</p>          <p>Your cover will now proceed to the next stage of the publishing process. We will contact you shortly with further updates.</p>          <p>Thank you for being a part of the BookLeaf family!</p>          <p>Warm regards,<br>     <strong>BookLeaf Publishing Team</strong><br>     info@bookleafpub.com</p>   </div> </div>",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        704,
+        -32
+      ],
+      "id": "dc7de3d9-a8fc-4a2a-b366-ec6771292b8e",
+      "name": "PASS email",
+      "webhookId": "a092f98e-972b-499e-b037-499387a7c45a",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "FGfoXUzOHz5UDRNl",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "3f826cf4-5de4-46e9-91f3-d3fff3e57b6e",
+              "leftValue": "={{ $json.records[0].fields.Status }}",
+              "rightValue": "PASS",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        352,
+        48
+      ],
+      "id": "dfc1635a-9562-46a0-b91d-489d30bc9383",
+      "name": "Route by status"
+    },
+    {
+      "parameters": {
+        "amount": 3
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        -272,
+        48
+      ],
+      "id": "cc7ee7ce-983b-416b-a105-c2822c9cd42d",
+      "name": "Wait",
+      "webhookId": "631b0fe0-aa53-49cb-a752-d1c9335f04a2"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Watch Cover Uploads": {
+      "main": [
+        [
+          {
+            "node": "Extract ISBN",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract ISBN": {
+      "main": [
+        [
+          {
+            "node": "Get Author Info",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Author Info": {
+      "main": [
+        [
+          {
+            "node": "Match Author",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Match Author": {
+      "main": [
+        [
+          {
+            "node": "Download Cover",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download Cover": {
+      "main": [
+        [
+          {
+            "node": "Prepare Image",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Image": {
+      "main": [
+        [
+          {
+            "node": "Gemini Vision Analysis",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini Vision Analysis": {
+      "main": [
+        [
+          {
+            "node": "Wait",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Analysis": {
+      "main": [
+        [
+          {
+            "node": "Save to Airtable",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save to Airtable": {
+      "main": [
+        [
+          {
+            "node": "Route by status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route by status": {
+      "main": [
+        [
+          {
+            "node": "PASS email",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "REVIEW NEEDED email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait": {
+      "main": [
+        [
+          {
+            "node": "Parse Analysis",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "96b99a15-b7db-4a2c-b396-eebbf5042e1c",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "d5546e5b9f6cbeb6bb8094ed59341cc130e3612b25f3e05386dfb68d6566041e"
+  },
+  "id": "5Ps7YvinZKWeioS7",
+  "tags": []
+}
